@@ -206,7 +206,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
     }
 }
 
-bool IsRechargable(StaticFunctionTag*, TESForm* a_form) {
+bool UsesRechargeFramework(StaticFunctionTag*, TESForm* a_form) {
     if (!a_form) return false;
     if (a_form->Is(FormType::Weapon)) {
         return a_form->As<TESObjectWEAP>()->HasKeyword(RechargeableKeyword);
@@ -242,7 +242,7 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     std::string_view scriptName = "RechargeFramework_Utils";
 
     vm->RegisterFunction("GetVersion", scriptName, GetPluginVersion);
-    vm->RegisterFunction("IsRechargable", scriptName, IsRechargable);
+    vm->RegisterFunction("UsesRechargeFramework", scriptName, UsesRechargeFramework);
     vm->RegisterFunction("GetItemChargeValue", scriptName, GetItemChargeValue);
 
     return false;
