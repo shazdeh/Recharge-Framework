@@ -1,6 +1,8 @@
 #include "logger.h"
 #include "ClibUtil/editorID.hpp";
 
+std::vector<int> GetPluginVersion(StaticFunctionTag*) { return {1, 0, 2}; }
+
 BGSKeyword* RechargeableKeyword;
 const char* keywordPrefix = "RF_Rechargeable_";
 std::vector<BGSKeyword*> chargeKeywords(6);
@@ -14,13 +16,45 @@ std::string buffer;
 
 int GetItemChargeValue(StaticFunctionTag*, TESForm* a_form);
 
-std::string GetRechargeableKeywordForIndex(size_t index) {
-    auto menu = UI::GetSingleton()->GetMenu<InventoryMenu>().get();
-    if (!menu) return "";
-    auto items = menu->GetRuntimeData().itemList->items;
-    if (index >= items.size() || index < 0) return "";
-    auto entryData = items[index]->data.objDesc;
-    if (!entryData) return "";
+InventoryEntryData* GetEntryDataAtIndex(int index) {
+    if (auto menu = UI::GetSingleton()->GetMenu<InventoryMenu>().get()) {
+        auto items = menu->GetRuntimeData().itemList->items;
+        if (index < items.size() && index >= 0) {
+            return items[index]->data.objDesc;
+        }
+    }
+    return nullptr;
+}
+
+template <typename T>
+T* GetExtraDataByType(InventoryEntryData* entryData) {
+    auto extraLists = entryData->extraLists;
+    if (extraLists) {
+        for (const auto& xList : *extraLists) {
+            if (!xList) continue;
+            if (auto extraData = xList->GetByType<T>(); extraData) {
+                return extraData;
+            }
+        }
+    }
+    return nullptr;
+}
+
+float GetEntryMaxCharge(InventoryEntryData* entryData) {
+    auto* object = entryData->GetObject();
+    if (!object->Is(FormType::Weapon)) return -1.0f;
+    auto weapon = object->As<TESObjectWEAP>();
+    if (!weapon) return -1.0f;
+    if (weapon->formEnchanting) {
+        return weapon->amountofEnchantment;
+    } else if (ExtraEnchantment* extraEnchant = GetExtraDataByType<ExtraEnchantment>(entryData); extraEnchant) {
+        return extraEnchant->charge;
+    }
+
+    return -1.0f;
+}
+
+std::string GetRechargeableKeyword(InventoryEntryData* entryData) {
     if (TESBoundObject* boundObject = entryData->GetObject(); boundObject) {
         if (auto kwform = boundObject->As<BGSKeywordForm>(); kwform) {
             for (const auto* keyword : kwform->GetKeywords()) {
@@ -51,19 +85,16 @@ std::string GetRechargeableKeywordForIndex(size_t index) {
 class RequestListHandler : public GFxFunctionHandler {
 public:
     virtual void Call(Params& params) override {
-        if (params.argCount == 2 && params.args[0].IsNumber() && params.args[1].IsBool()) {
+        if (params.argCount == 1 && params.args[0].IsNumber()) {
             auto index = params.args[0].GetUInt();
-            auto keywordID = GetRechargeableKeywordForIndex(index);
+            auto entryData = GetEntryDataAtIndex(index);
+            if (!entryData) return;
+            auto keywordID = GetRechargeableKeyword(entryData);
             if (keywordID.empty()) return;
             auto* player = PlayerCharacter::GetSingleton();
             buffer.clear();
 
-            // BaseAV of "ItemCharge" contains the maxCharge,
-            // we need it for itemCard.itemInfo.listItems to show correct charge in UI
-            bool isLeft = params.args[1].GetBool();
-            auto av = isLeft ? ActorValue::kLeftItemCharge : ActorValue::kRightItemCharge;
-            buffer = std::to_string(player->AsActorValueOwner()->GetBaseActorValue(av)) + "||";
-
+            buffer = std::to_string(GetEntryMaxCharge(entryData)) + "||";
             BGSListForm* list = TESForm::LookupByEditorID<BGSListForm>(keywordID + "List");
             if (list) {
                 list->ForEachForm([player](TESForm* form) {
@@ -86,21 +117,25 @@ public:
 class ChargeHandler : public GFxFunctionHandler {
 public:
     virtual void Call(Params& params) override {
-        if (params.argCount > 1 && params.args[0].IsString() && params.args[1].IsBool()) {
+        if (params.argCount == 2 && params.args[0].IsString() && params.args[1].IsNumber()) {
             std::string formID = params.args[0].GetString();
-            bool isLeft = params.args[1].GetBool();
+            auto index = params.args[1].GetUInt();
             auto* form = TESForm::LookupByEditorID(formID);
             if (!form || !form->IsBoundObject()) return;
+            auto entryData = GetEntryDataAtIndex(index);
+            if (!entryData) return;
             auto* object = form->As<TESBoundObject>();
             auto* player = PlayerCharacter::GetSingleton();
             if (!player->GetItemCount(object)) return;
-            auto* avo = player->AsActorValueOwner();
-            auto av = isLeft ? ActorValue::kLeftItemCharge : ActorValue::kRightItemCharge;
+            
             auto chargeAmount = GetItemChargeValue(nullptr, form);
-            if (chargeAmount == 0) chargeAmount = (int) avo->GetBaseActorValue(av); // 0: full recharge
-            avo->ModActorValue(ACTOR_VALUE_MODIFIER::kDamage, av, chargeAmount);
-            player->RemoveItem(object, 1, ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-            PlaySound("UIEnchantRecharge");
+            if (chargeAmount == 0) chargeAmount = GetEntryMaxCharge(entryData); // 0: full recharge
+            ExtraCharge* xCharge = GetExtraDataByType<ExtraCharge>(entryData);
+            if (xCharge) {
+                xCharge->charge += chargeAmount;
+                player->RemoveItem(object, 1, ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                PlaySound("UIEnchantRecharge");
+            }
         }
     }
 };
@@ -110,11 +145,7 @@ public:
     virtual void Call(Params& params) override {
         if (params.argCount == 1 && params.args[0].IsNumber()) {
             auto index = params.args[0].GetUInt();
-            auto menu = UI::GetSingleton()->GetMenu<InventoryMenu>().get();
-            if (!menu) return;
-            auto items = menu->GetRuntimeData().itemList->items;
-            if (index >= items.size() || index < 0) return;
-            auto entryData = items[index]->data.objDesc;
+            auto entryData = GetEntryDataAtIndex(index);
             if (!entryData) return;
             if (TESBoundObject* boundObject = entryData->GetObject(); boundObject) {
                 if (boundObject->As<BGSKeywordForm>()->HasKeyword(RechargeableKeyword)) {
@@ -228,14 +259,6 @@ int GetItemChargeValue(StaticFunctionTag*, TESForm* a_form) {
     }
 
     return chargeValues[0];  // if no keyword is provided, the item is considered a "petty" gem
-}
-
-std::vector<int> GetPluginVersion(StaticFunctionTag*) {
-    std::vector<int> version(3);
-    version[0] = 1;
-    version[1] = 0;
-    version[2] = 1;
-    return version;
 }
 
 bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {

@@ -40,23 +40,13 @@ class RechargeFramework extends MovieClip {
         if (inventoryLists.itemList.selectedIndex == -1) {
             return;
         }
-
         
         if (_root.RF_IsEnabled(inventoryLists.itemList.selectedIndex) === true) {
             if ( ! ( Menu_mc.shouldProcessItemsListInput(false) && itemCard.itemInfo.charge != undefined && itemCard.itemInfo.charge < 100 ) ) {
                 return;
             }
-
-            if (itemList.selectedEntry.equipState === Inventory.ES_NONE) {
-                // we need the item equipped in order to update the ActorValue
-                // @todo: remove this, update InventoryEntryData instead of modifying AVs
-                Menu_mc.AttemptEquip();
-            }
             bRecharging = true;
-            onEnterFrame = function() { // wait 1 frame, give UI time to update from AttemptEquip()
-                showList(_root.RF_RequestList(inventoryLists.itemList.selectedIndex, isLeftHand()));
-                onEnterFrame = null;
-            }
+            showList(_root.RF_RequestList(inventoryLists.itemList.selectedIndex));
         } else {
             Menu_mc.RF__AttemptChargeItem();
         }
@@ -65,17 +55,12 @@ class RechargeFramework extends MovieClip {
     function onListItemPress(event: Object): Void {
         this = RechargeFramework.instance;
         if (bRecharging) {
-            _root.RF_Charge(event.entry.id, isLeftHand());
+            _root.RF_Charge(event.entry.id, inventoryLists.itemList.selectedIndex);
             itemCard.HideListMenu();
             bRecharging = false;
         } else {
             itemCard.RF__onListItemPress(event);
         }
-    }
-
-    function isLeftHand() : Boolean {
-        var equipState:Number = itemList.selectedEntry.equipState;
-        return equipState === Inventory.ES_LEFT_EQUIPPED;
     }
 
     function showList(serializedData:String) {
